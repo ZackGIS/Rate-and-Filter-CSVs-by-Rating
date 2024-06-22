@@ -1,0 +1,3 @@
+This script uses langchain and a ChatOpenAI llm to rate each CSV entry according to how related each entry is to certain energy keywords provided in the Classification. Entries with high relevancy (rated between 7-10) are saved into new CSV files. 
+I think the logic should work for AzureChatAI but the OpanAI llm is giving me problems. The previous script to use ChatOpenAI to write descriptions for entries with nulls had the same issues. Will post screenshots of the errors produced
+  when running the script.
