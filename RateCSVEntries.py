@@ -1,108 +1,99 @@
-from pydantic import BaseModel, Field
+import os
+import pandas as pd
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
-import pandas as pd
-import openai
-import os
+from pydantic import BaseModel, Field
+import time
+from multiprocessing import Pool
 
-# API key
-os.environ["OPENAI_API_KEY"] = "NA- it's saved in a separate file"
-openai.api_key = os.getenv("OPENAI_API_KEY")
-#print(f"API Key: {openai.api_key}")
 
-# input and output folder paths
-inputFolderPath = r'C:\InternCSVs\GIS_Web_Services'
-outputFolderPath = r'C:\InternCSVs\GIS_Web_Services\output'
+inputFolderPath = r'C:\InternCSVs\GIS_Web_Services\output'
+outputFolderPath = r'C:\InternCSVs\GIS_Web_Services\output\Runthrough4'
 os.makedirs(outputFolderPath, exist_ok=True)
 
-# telling the llm to look at the Classification for instructions.
 tagging_prompt = ChatPromptTemplate.from_template(
     """
-Extract the desired information from the following passage.
+    You are an expert in energy data classification. 
+    Your job is to extract and classify the relevant properties related to energy from the passage below.
 
-Only extract the properties mentioned in the 'Classification' function.
+    The information you need to extract is:
+    1. Energy aspect: Describe the specific energy-related aspect (e.g., oil, gas, renewables).
+    2. Energy relevance: On a scale of 1 to 10, rate how closely related the passage is to energy.
+    3. Tag: Choose a relevant tag from the following list based on the context: 
+       ["wells", "pipelines", "infrastructure", "imagery", "weather", "environmental", "geology", 
+       "seismic", "geomatics", "renewables", "emissions", "basemaps", "bathymetry", "licenses", 
+       "blocks", "leases", "oil", "gas", "topography", "gravity", "magnetics"].
 
-Passage:
-{input}
-"""
+    Only extract these three pieces of information and format the output according to the Classification(BaseModel).
+    Now, classify the following text from the data source:
+    {input}
+    """
 )
 
 
-# Borrowed from the example code. This class defines the structure of the llm output.
 class Classification(BaseModel):
-
-
-    energy: str = Field(description="What aspect of energy is this related to?")
-
-    # this is the rating determining how related to energy each entry in the csv is. 1-very low, 10-very high.
-    energy_related: int = Field(description="How related is this to energy from 1 to 10")
-
-    # values in the enum list represent different categories the llm will classify entries into after giving
-    # an "energy related rating" from 1-10.
+    energy: str = Field(..., description="What aspect of energy is this related to?")
+    energy_related: int = Field(..., description="How related is this to energy on a scale from 1 to 10?")
     tag: str = Field(
-        ..., enum=[
+        ..., description="Please select a tag from the provided list.",
+        enum=[
             "wells", "pipelines", "infrastructure", "imagery", "weather",
             "environmental", "geology", "seismic", "geomatics", "renewables",
-            "emissions", "basemaps", "bathymetry"
+            "emissions", "basemaps", "bathymetry", "licenses", "blocks", "leases",
+            "oil", "gas", "topography", "gravity", "magnetics"
         ]
     )
 
 
-llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0, max_tokens=None,
-                 timeout=None).with_structured_output(Classification)
+def processFile(filename):
+    print(f"Starting processing for file: {filename}")
+    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0, max_tokens=None, timeout=None).with_structured_output(Classification)
+    tagging_chain = tagging_prompt | llm
 
-tagging_chain = tagging_prompt | llm
+    csvFilePath = os.path.join(inputFolderPath, filename)
+    data = pd.read_csv(csvFilePath)
+
+    #Creating the extra columns in the dataframe to hold the output from the LLM
+    data['energy'] = None
+    data['energy_related'] = None
+    data['tag'] = None
+
+    for index, row in data.iterrows():
+        description_text = row['description']
+        tags_text = row['tags']
+        title_text = row['title']
+        text = description_text and title_text if description_text != "No description" else tags_text and title_text
+        prompt_input = {"input": text}
+
+        try:
+            print(f"Making API call for row {index} in {filename}")
+            result = tagging_chain.invoke(prompt_input)
+            data.at[index, 'energy'] = result['energy']
+            data.at[index, 'energy_related'] = result['energy_related']
+            data.at[index, 'tag'] = result['tag']
+            time.sleep(1)
+        except Exception as e:
+            print(f"Error {index} in {filename}: {e}")
+            continue
+
+    #filter the data based on 'energy_related' score between and including 7-10
+    filtered_data = data[(data['energy_related'] >= 7) and (data['energy_related'] <= 10)]
 
 
-# tagging_function from the code example provided.
-def tagging_function(text):
-    result = tagging_chain.invoke({"input": text})
-    return {
-        'energy': result.energy,
-        'energy_related': result.energy_related,
-        'tag': result.tag
-    }
+    outputFilePath = os.path.join(outputFolderPath, filename[:-4] + "_filtered.csv")
+    print(f"Saving filtered data for file: {filename}")
+    filtered_data.to_csv(outputFilePath, index=False)
 
 
-for filename in os.listdir(inputFolderPath):     # loop through each file in input folder
-    if filename.endswith('.csv'):    # make sure it's a csv file first
-        csvFilePath = os.path.join(inputFolderPath, filename)    # specify filepath for each csv in the folder
-        data = pd.read_csv(csvFilePath)      # creating a pandas dataframe object
+def main():
+    csv_files = []
+    for filename in os.listdir(inputFolderPath):
+        if filename.endswith('.csv'):
+            csv_files.append(filename)
 
-        # these lines are initializing new columns in the csv files i think.
-        # they won't be saved into the output csv. Just used for filtering the original files
-        data['energy'] = None
-        data['energy_related'] = None
-        data['tag'] = None
+    with Pool(processes=4) as pool:
+        pool.map(processFile, csv_files)
 
-        # replacing any '_' in the title column with a space. Needed so the llm can process the title text.
-        data['title_str'] = data['title'].astype(str).str.replace('_', ' ')
 
-        # not certain we need this but including it anyway. It's adding a title length column to the csv
-        # but it won't be saved in the output like the others above.
-        data['title_len'] = data['title'].apply(lambda x: len(str(x).split()))
-
-        # start looping over the data frame.
-        for index, row in data.iterrows():
-
-            # news_text stores the processed title text. got this from the example code.
-            news_text = row['title_str']
-
-            # calling the tagging_function with parameter news_text.
-            tagging_result = tagging_function(news_text)
-
-            # updating energy, energy_related, and tag at the current index, row of the DF with the results retruned by
-            # the tagging_function
-            data.at[index, 'energy'] = tagging_result['energy']
-            data.at[index, 'energy_related'] = tagging_result['energy_related']
-            data.at[index, 'tag'] = tagging_result['tag']
-
-        # now choosing only results with a "high" energy-related rating to be the output for the new CSVs.
-        filtered_data = data[(data['energy_related'] >= 7) & (data['energy_related'] <= 10)]
-
-        outputFilePath = os.path.join(outputFolderPath, filename[:-4] + "_filtered.csv")
-
-        # save the new CSVs but don't include any of the temporary columns generated above. I don't think we want
-        # the format changed. Just the most relevant feature layers.
-        filtered_data.to_csv(outputFilePath, index=False, columns=['title', 'url', 'type', 'tags', 'description',
-                                                                   'thumbnailurl'])
+if __name__ == "__main__":
+    main()
