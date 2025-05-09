@@ -7,7 +7,11 @@ import time
 from multiprocessing import Pool
 
 
-inputFolderPath = r'C:\InternCSVs\GIS_Web_Services\output'
+os.environ["OPENAI_API_KEY"] = "Your API key goes here"
+
+print(os.getenv("OPENAI_API_KEY")) #Make sure to right key is used
+
+inputFolderPath = r'C:\InternCSVs\GIS_Web_Services\output2\Batch3'
 outputFolderPath = r'C:\InternCSVs\GIS_Web_Services\output\Runthrough3'
 os.makedirs(outputFolderPath, exist_ok=True)
 
@@ -48,7 +52,7 @@ class Classification(BaseModel):
 # with the 3 label fields defined in the Classification basemodel
 def processFile(filename):
     print(f"Starting processing for file: {filename}")
-    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0, max_tokens=None, timeout=None).with_structured_output(Classification)
+    llm = ChatOpenAI(model="gpt-4-turbo", temperature=0, max_tokens=None, timeout=None).with_structured_output(Classification)
     tagging_chain = tagging_prompt | llm #tagging chain uses combines the tagging prompt (which takes in input description_text, tags_text, and title_text defined below) with the
                                         # llm.
 
@@ -73,16 +77,16 @@ def processFile(filename):
         try:
             print(f"Making API call for row {index} in {filename}")
             result = tagging_chain.invoke(prompt_input) # Invoke function is called on the taggin_chain object
-            data.at[index, 'energy'] = result['energy']
-            data.at[index, 'energy_related'] = result['energy_related']
-            data.at[index, 'tag'] = result['tag']
-            time.sleep(1)
+            data.at[index, 'energy'] = result.energy
+            data.at[index, 'energy_related'] = result.energy_related
+            data.at[index, 'tag'] = result.tag
+            time.sleep(2.65)
         except Exception as e:
             print(f"Error {index} in {filename}: {e}")
             continue
 
     #filter the data based on 'energy_related' score between and including 7-10
-    filtered_data = data[(data['energy_related'] >= 7) and (data['energy_related'] <= 10)]
+    filtered_data = data[(data['energy_related'] >= 7) & (data['energy_related'] <= 10)]
 
 
     outputFilePath = os.path.join(outputFolderPath, filename[:-4] + "_filtered.csv")
